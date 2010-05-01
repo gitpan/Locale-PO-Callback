@@ -62,11 +62,5 @@ $VAR1 = [
             'msgstr' => 'in a source file, and is fuzzy',
             'type' => 'translation',
             'comments' => ''
-          },
-          {
-            'locations' => [],
-            'flags' => {},
-            'type' => 'translation',
-            'comments' => ''
           }
         ];

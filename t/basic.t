@@ -30,7 +30,6 @@ sub prepare {
 
 sub test {
     die "Please run with PREPARE=1 to create prepare file first.\n" unless -e "$filename.pl";
-    use Data::Dumper;
     my $prepared = do "$filename.pl";
 
     plan tests => scalar(@$prepared);
