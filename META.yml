@@ -13,6 +13,8 @@ no_index:
   directory:
     - inc
     - t
+requires:
+  POSIX: 0
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.6
+version: 0.02

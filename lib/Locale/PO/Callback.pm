@@ -1,15 +1,14 @@
 package Locale::PO::Callback;
 
 # TO DO:
-#  - "empty" function to return an empty .po file
-#  - "setdate" function to reset the date of a .po file
 #  - support encodings other than UTF-8
-#  - "parse" function to parse strings rather than files
 
 use strict;
 use warnings;
 
-our $VERSION = 0.01;
+use POSIX qw(strftime);
+
+our $VERSION = 0.02;
 
 sub new {
     my ($class, $callback) = @_;
@@ -20,9 +19,26 @@ sub new {
     return bless($self, $class);
 }
 
-sub read {
+sub read_string {
+    my ($self, $string) = @_;
+
+    $self->read($string, 1);
+}
+
+sub read_file {
     my ($self, $filename) = @_;
-    open PO, "<$filename" or die "Couldn't open $filename: $!";
+
+    $self->read($filename, 0);
+}
+
+sub read {
+    my ($self, $filename, $is_string) = @_;
+
+    if ($is_string) {
+	open PO, '<', \$filename or die "Couldn't read string: $!";
+    } else {
+	open PO, "<$filename" or die "Couldn't open $filename: $!";
+    }
 
     # Every line in a .po file is either:
     #  * a comment, applying to the next stanza
@@ -117,7 +133,13 @@ sub read {
 	    $stanza->{'comments'} = join("\n", @comments);
 	}
 
-	$self->{callback}->($stanza);
+	if (defined $stanza->{'msgid'} ||
+	    defined $stanza->{'msgstr'} ||
+	    defined $stanza->{'msgstr[0]'} ||
+	    defined $stanza->{'headers'}
+	    ) {
+	    $self->{callback}->($stanza);
+	}
     };
 
     while (<PO>) {
@@ -138,6 +160,38 @@ sub read {
     }
     $handle_stanza->();
     close PO or die "Couldn't close $filename: $!";
+}
+
+sub create_empty {
+    my ($self) = @_;
+
+    my @fields = (
+	['Project-Id-Version' => 'PACKAGE VERSION'],
+	['PO-Revision-Date' => _today()],
+	# FIXME: take this from the environment,
+	# if it's available?
+	['Last-Translator' => 'FULL NAME <EMAIL@ADDRESS>'],
+	['Language-Team' => 'LANGUAGE <LL@li.org>'],
+	['MIME-Version' => '1.0'],
+	['Content-Type' => 'text/plain; charset=UTF-8'],
+	['Content-Transfer-Encoding' => '8bit'],
+	);
+
+    my @fieldnames;
+    my %fields;
+
+    for (@fields) {
+	push @fieldnames, $_->[0];
+    }
+
+    for (@fields) {
+	$fields{lc $_->[0]} = $_->[1];
+    }
+
+    $self->{callback}->({type => 'header',
+			 headers => \%fields,
+			 header_order => \@fieldnames,
+			});
 }
 
 sub rebuilder {
@@ -210,9 +264,18 @@ sub rebuilder {
 	    $result .= $stanza->{'comments'} if $stanza->{'comments'};
 	    $result .= "msgid \"\"\n";
 	    $result .= "msgstr \"\"\n";
+	    my %seen;
 	    for my $header (@{$stanza->{'header_order'}}) {
 		my $value = $stanza->{'headers'}->{lc $header};
-		$result .= "\"$header\: $value\\n\"\n";
+		$result .= "\"$header: $value\\n\"\n";
+		$seen{lc $header} = 1;
+	    }
+	    for my $header (keys %{$stanza->{'headers'}}) {
+		$header = lc $header;
+		next if defined $seen{$header};
+		my $value = $stanza->{'headers'}->{$header};
+		$header =~ s/\b(.)/\u$1/g; # titlecase
+		$result .= "\"$header: $value\\n\"\n";
 	    }
 	    $result .= "\n";
 	} elsif ($stanza->{'type'} eq 'other') {
@@ -222,6 +285,29 @@ sub rebuilder {
 	}
 
 	$callback->($result);
+    };
+}
+
+sub _today {
+    return strftime("%Y-%m-%d %H:%M %z", localtime);
+}
+
+sub set_date {
+    my ($callback) = @_;
+
+    return sub {
+	my ($param) = @_;
+
+	if ($param->{'type'} eq 'header') {
+	    my $date_found = defined $param->{'headers'}->{'po-revision-date'};
+
+	    $param->{'headers'}->{'po-revision-date'} = _today();
+
+	    push @{$param->{'header_order'}}, 'PO-Revision-Date'
+		unless $date_found;
+	}
+
+	$callback->($param);
     };
 }
 
@@ -259,12 +345,26 @@ to be produced, as is commonly done with XML processing.
 =head2 new(callback)
 
 Creates an object.  The callback parameter is a coderef
-which will be called with a description of every line
+which will be called with a description of every item
 in the file.
 
-=head2 read()
+=head2 read_file(filename)
 
 Reads and parses a file.
+
+=head2 read_string(string)
+
+Parses a string.
+
+=head2 read(filename_or_string, is_string)
+
+Reads and parses a file or a string, depending on the is_string
+argument.
+
+=head2 create_empty()
+
+Behaves as though we had just read in an empty file,
+with default headers.
 
 =head1 OTHER THINGS
 
@@ -274,6 +374,18 @@ Given a coderef, this function returns a function which
 can be passed as a callback to this class's constructor.
 The coderef will be called with strings which, if concatenated,
 make a .po file equivalent to the source .po file.
+
+In pipeline terms, this function produces sinks.
+
+=head2 set_date(coderef)
+
+Given a coderef, this function returns a function which
+can be passed as a callback to this class's constructor.
+The function will pass its parameters through to the
+coderef unchanged, except for headers, when the file date
+will be changed to the current system date.
+
+In pipeline terms, this function produces filters.
 
 =head1 PARAMETERS TO THE CALLBACK
 
@@ -302,10 +414,13 @@ The source message, in its singular form.
 =head2 msgid_plural
 
 The source message, in its plural form.
+This is usually empty.
 
 =head2 msgstr
 
-The translation, if any.
+The translation, if any,
+unless this translation has plural forms,
+in which case see the next entry.
 
 =head2 msgstr[0] (etc)
 
@@ -328,13 +443,7 @@ in which they were found.
 
 =head1 FUTURE EXPANSION
 
-We need an "empty" function to return an empty .po file.
-
-We need a "setdate" function to reset the date of a .po file.
-
 We need to support encodings other than UTF-8.
-
-We need a "readString" function to parse strings rather than files.
 
 This documentation was written in a bit of a rush.
 
