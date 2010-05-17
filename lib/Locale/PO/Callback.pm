@@ -8,7 +8,7 @@ use warnings;
 
 use POSIX qw(strftime);
 
-our $VERSION = 0.03;
+our $VERSION = 0.04;
 
 sub new {
     my ($class, $callback) = @_;
@@ -39,6 +39,8 @@ sub read {
     } else {
 	open PO, "<$filename" or die "Couldn't open $filename: $!";
     }
+
+    binmode PO, ":utf8";
 
     # Every line in a .po file is either:
     #  * a comment, applying to the next stanza
@@ -123,7 +125,11 @@ sub read {
 		if ($comment =~ /^#: (.*):(\d*)$/) {
 		    push @{ $stanza->{'locations'} }, [$1, $2];
 		} elsif ($comment =~ /^#, (.*)$/) {
-		    $stanza->{'flags'}->{lc $1} = 1;
+		    my $flags = $1;
+		    $flags =~ s/\s*,\s*/,/g;
+		    for my $flag (split m/,/, $flags) {
+			$stanza->{'flags'}->{lc $flag} = 1;
+		    }
 		} else {
 		    push @comments, $comment;
 		}
@@ -209,6 +215,11 @@ sub rebuilder {
 
 	    return '' unless defined $text;
 
+	    $text =~ s/\\/\\\\/g;
+	    $text =~ s/\t/\\t/g;
+	    $text =~ s/\n/\\n/g;
+	    $text =~ s/\"/\\"/g;
+
 	    # Test the simple case first
 	    if (length($keyword) + 4 + length($text) <= $max_width) {
 		return "$keyword \"$text\"\n";
@@ -279,7 +290,7 @@ sub rebuilder {
 	    }
 	    $result .= "\n";
 	} elsif ($stanza->{'type'} eq 'other') {
-	    $result .= '['.$stanza->{'other'}.']';
+	    $result .= '# (other:) '.$stanza->{'other'}."\n";
 	} else {
 	    die "Unknown type $stanza->{'type'}";
 	}
